@@ -53,6 +53,7 @@ export class Model {
         return {
             model: this.name,
             messages,
+            tools: context.tools,
             options: this.options,
             signal: context.signal,
         };
