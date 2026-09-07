@@ -12,6 +12,12 @@ import type { AgentContext } from "./agent-context";
 import type { AgentEvent } from "./agent-event";
 import { MaximumStepsError } from "./errors";
 import { serializeToolResult } from "./serialize-tool-result";
+import type { AgentMiddleware } from "./agent-middleware";
+import type { ModelContext } from "@/foundation/models";
+
+type BeforeToolUseDecision =
+    | { skip: false }
+    | { skip: true; result: unknown };
 
 export class Agent {
     private readonly _context: AgentContext;
@@ -23,12 +29,15 @@ export class Agent {
     private _streaming = false;
     private _abortController: AbortController | null = null;
 
+    private readonly _middlewares: AgentMiddleware[];
+
     constructor(options: {
         model: Model;
         prompt: string;
         messages?: NonSystemMessage[];
         tools?: Tool[];
         maxSteps?: number;
+        middlewares?: AgentMiddleware[];
     }) {
         // 标准实现示例：复制外部数组，默认最多运行 20 个 step。
         this.model = options.model;
@@ -38,7 +47,8 @@ export class Agent {
             messages: [...(options.messages ?? [])],
             tools: [...(options.tools ?? [])],
         };
-        this._toolRegistry = new ToolRegistry({ tools: options.tools ?? [] })
+        this._toolRegistry = new ToolRegistry({ tools: options.tools ?? [] });
+        this._middlewares = [...(options.middlewares ?? [])];
     }
 
     get messages(): NonSystemMessage[] {
@@ -62,14 +72,16 @@ export class Agent {
             // TODO 1：放入 5.0 的主循环，包括 userMessage 追加和 MaximumStepsError。
             // userMessage 只追加一次；重入检查必须发生在追加之前。
             this._context.messages.push(userMessage);
-            // for step = 1 ... maxSteps，调用 model.stream。
+            await this._beforeAgentRun();
             for (let step = 1; step <= this.maxSteps; step++) {
                 // TODO 2：取本次 signal，每轮开始检查中止，并传给 _think(signal)、_act(toolUses, signal)。
                 // 在 _think 返回后、_act 完成后也检查中止，避免取消被当成正常结束或达到步数上限。
+                await this._beforeAgentStep(step);
                 const signal = this._abortController.signal;
                 signal.throwIfAborted();
                 const assistantMessage = yield* this._think(signal);
-
+                signal.throwIfAborted();
+                await this._afterModel(assistantMessage);
                 signal.throwIfAborted();
 
                 // append/yield assistant message，保持 transcript 与 event 顺序一致。
@@ -84,21 +96,29 @@ export class Agent {
                 if (toolUses.length === 0) return;
 
                 yield* this._act(toolUses, signal);
-
+                await this._afterAgentStep(step);
                 signal.throwIfAborted();
             }
             // 循环耗尽后抛出带 maxSteps 的 MaximumStepsError。
             throw new MaximumStepsError({ maxSteps: this.maxSteps });
         } finally {
-            this._streaming = false;
-            this._abortController = null;
+            try {
+                await this._afterAgentRun();
+            } finally {
+                this._streaming = false;
+                this._abortController = null;
+            }
         }
     }
 
     private async *_think(signal?: AbortSignal): AsyncGenerator<AgentEvent, AssistantMessage> {
         // 遍历累计 snapshot，但只保留最后一个完整 AssistantMessage。
         let latest: AssistantMessage | undefined;
-        for await (const snapshot of this.model.stream({ ...this._context, signal })) {
+        const modelContext = { ...this._context, signal };
+        await this._beforeModel(modelContext);
+        signal?.throwIfAborted();
+
+        for await (const snapshot of this.model.stream(modelContext)) {
             latest = snapshot;
 
             const latestToolUse = this._extractToolUses(snapshot).at(-1);
@@ -153,17 +173,129 @@ export class Agent {
     }
 
     private async _invokeTool(toolUse: ToolUseContent, signal?: AbortSignal): Promise<ToolMessage> {
-        // TODO 10：通过 ToolRegistry 执行并用 serializeToolResult 转为字符串；
-        // tool_use_id 必须原样复制 toolUse.id。
-        const toolResult = await this._toolRegistry.invoke({ name: toolUse.name, input: toolUse.input, signal: signal });
+        const decision = await this._beforeToolUse(toolUse);
+        signal?.throwIfAborted();
+
+        let toolResult: unknown;
+        if (decision.skip) {
+            toolResult = decision.result;
+        } else {
+            const execution = await this._toolRegistry.invoke({ name: toolUse.name, input: toolUse.input, signal: signal });
+
+            // 成功时取实际返回值；失败时保留完整错误信息。
+            toolResult = execution.ok ? execution.value : execution;
+        }
+
+        signal?.throwIfAborted();
+        await this._afterToolUse(toolUse, toolResult);
+        signal?.throwIfAborted();
 
         return {
             role: "tool",
             content: [{
                 type: "tool_result",
                 tool_use_id: toolUse.id,
-                content: serializeToolResult(toolResult.ok ? toolResult.value : toolResult),
+                content: serializeToolResult(toolResult),
             }]
         }
     }
+
+    private async _beforeAgentRun(): Promise<void> {
+        for (const middleware of this._middlewares) {
+            const result = await middleware.beforeAgentRun?.({
+                agentContext: this._context,
+            });
+            // 修改保存在 Agent 上，后续 step 会继续使用这些字段。
+            if (result) Object.assign(this._context, result);
+        }
+    }
+
+    private async _afterAgentRun(): Promise<void> {
+        for (const middleware of this._middlewares) {
+            const result = await middleware.afterAgentRun?.({
+                agentContext: this._context,
+            });
+            if (result) Object.assign(this._context, result);
+        }
+    }
+
+    private async _beforeAgentStep(step: number): Promise<void> {
+        for (const middleware of this._middlewares) {
+            const result = await middleware.beforeAgentStep?.({
+                agentContext: this._context,
+                step: step,
+            });
+            if (result) Object.assign(this._context, result);
+        }
+    }
+
+    private async _afterAgentStep(step: number): Promise<void> {
+        for (const middleware of this._middlewares) {
+            const result = await middleware.afterAgentStep?.({
+                agentContext: this._context,
+                step: step,
+            });
+            if (result) Object.assign(this._context, result);
+        }
+    }
+
+    private async _beforeModel(modelContext: ModelContext): Promise<void> {
+        for (const middleware of this._middlewares) {
+            // host 在这里真正调用 hook；
+            // ?. 让未实现 beforeModel 的 Middleware 自动跳过。
+            // await 保证当前 hook 完成并合并结果后，才轮到下一个 Middleware。
+            const result = await middleware.beforeModel?.({
+                modelContext,
+                agentContext: this._context,
+            });
+            // 只修改本次模型请求的视图。Object.assign 是浅合并：同名字段由后者覆盖。
+            // 例如返回 { messages: [...] } 会替换整个 messages 字段，而不是自动追加。
+            if (result) Object.assign(modelContext, result);
+        }
+    }
+
+    private async _afterModel(message: AssistantMessage): Promise<void> {
+        for (const middleware of this._middlewares) {
+            const result = await middleware.afterModel?.({
+                agentContext: this._context,
+                message,
+            });
+            // 原地更新本次回复；下一个 Middleware 和后续 Tool 提取都读取更新后的对象。
+            if (result) Object.assign(message, result);
+        }
+    }
+
+    private async _beforeToolUse(toolUse: ToolUseContent): Promise<BeforeToolUseDecision> {
+        for (const middleware of this._middlewares) {
+            const result = await middleware.beforeToolUse?.({
+                agentContext: this._context,
+                toolUse: toolUse,
+            });
+            if (!result) continue;
+
+            if ("__skip" in result) {
+                // 此时类型是 { __skip: true; result: unknown }
+                return {
+                    skip: true,
+                    result: result.result,
+                };
+            }
+
+            // 此时类型是 Partial<AgentContext>
+            Object.assign(this._context, result);
+        }
+        return { skip: false };
+    }
+
+    private async _afterToolUse(toolUse: ToolUseContent, toolResult: unknown): Promise<void> {
+        for (const middleware of this._middlewares) {
+            const result = await middleware.afterToolUse?.({
+                agentContext: this._context,
+                toolUse: toolUse,
+                toolResult: toolResult,
+            })
+            if (result) Object.assign(this._context, result);
+        }
+    }
+
 }
