@@ -67,17 +67,17 @@ export class Agent {
         if (this._streaming) throw new Error("Agent is already streaming");
 
         this._abortController = new AbortController();
+        const signal = this._abortController.signal;
         this._streaming = true;
         try {
-            // TODO 1：放入 5.0 的主循环，包括 userMessage 追加和 MaximumStepsError。
             // userMessage 只追加一次；重入检查必须发生在追加之前。
             this._context.messages.push(userMessage);
+            signal.throwIfAborted();
             await this._beforeAgentRun();
+            signal.throwIfAborted();
             for (let step = 1; step <= this.maxSteps; step++) {
-                // TODO 2：取本次 signal，每轮开始检查中止，并传给 _think(signal)、_act(toolUses, signal)。
-                // 在 _think 返回后、_act 完成后也检查中止，避免取消被当成正常结束或达到步数上限。
+                signal.throwIfAborted();
                 await this._beforeAgentStep(step);
-                const signal = this._abortController.signal;
                 signal.throwIfAborted();
                 const assistantMessage = yield* this._think(signal);
                 signal.throwIfAborted();
@@ -115,10 +115,12 @@ export class Agent {
         // 遍历累计 snapshot，但只保留最后一个完整 AssistantMessage。
         let latest: AssistantMessage | undefined;
         const modelContext = { ...this._context, signal };
+        signal?.throwIfAborted();
         await this._beforeModel(modelContext);
         signal?.throwIfAborted();
 
         for await (const snapshot of this.model.stream(modelContext)) {
+            signal?.throwIfAborted();
             latest = snapshot;
 
             const latestToolUse = this._extractToolUses(snapshot).at(-1);
@@ -136,6 +138,7 @@ export class Agent {
                     input: latestToolUse.input
                 }
             }
+            signal?.throwIfAborted();
         }
         if (!latest) throw new Error("Model stream did not yield an assistant message");
         return latest;
@@ -153,9 +156,8 @@ export class Agent {
             signal?.throwIfAborted();
             const candidates = [...remaining].map((index) => pending[index]!);
             const resolved = await Promise.race(candidates);
-            signal?.throwIfAborted();
             remaining.delete(resolved.index);
-            // TODO 3：把 resolved.message 先 append 到 transcript，再 yield message event。
+            // 把 resolved.message 先 append 到 transcript，再 yield message event。
             // 不得按 resolved.index 重新排序，也不要重复序列化或再次执行 Tool。
             this._context.messages.push(resolved.message);
             yield {
@@ -173,6 +175,7 @@ export class Agent {
     }
 
     private async _invokeTool(toolUse: ToolUseContent, signal?: AbortSignal): Promise<ToolMessage> {
+        signal?.throwIfAborted();
         const decision = await this._beforeToolUse(toolUse);
         signal?.throwIfAborted();
 
@@ -182,13 +185,14 @@ export class Agent {
         } else {
             const execution = await this._toolRegistry.invoke({ name: toolUse.name, input: toolUse.input, signal: signal });
 
+            if (!execution.ok && execution.code === "ABORTED") {
+                signal?.throwIfAborted();
+            }
             // 成功时取实际返回值；失败时保留完整错误信息。
             toolResult = execution.ok ? execution.value : execution;
         }
 
-        signal?.throwIfAborted();
         await this._afterToolUse(toolUse, toolResult);
-        signal?.throwIfAborted();
 
         return {
             role: "tool",
