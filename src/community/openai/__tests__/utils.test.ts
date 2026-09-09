@@ -82,6 +82,31 @@ describe("OpenAI protocol conversion", () => {
     expect(messages).toEqual(originalMessages);
   });
 
+  test("preserves historical thinking in the reasoning_content field", () => {
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "inspect first" },
+          { type: "text", text: "I will inspect the file" },
+          { type: "tool_use", id: "call-1", name: "read_file", input: { path: "a.ts" } },
+        ],
+      },
+    ];
+    const originalMessages = structuredClone(messages);
+    const result = convertToOpenAIMessages(messages);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      reasoning_content: "inspect first",
+      tool_calls: [
+        { id: "call-1", function: { name: "read_file", arguments: '{"path":"a.ts"}' } },
+      ],
+    });
+    expect(messages).toEqual(originalMessages);
+  });
+
   test("keeps text and multiple tool calls in one assistant message", () => {
     const result = convertToOpenAIMessages([
       {
@@ -140,6 +165,24 @@ describe("OpenAI protocol conversion", () => {
       { type: "tool_use", id: "call-1", name: "read_file", input: { path: "a.ts" } },
     ]);
     expect(result.usage).toBeUndefined();
+  });
+
+  test("does not create an empty text block for null content with a tool call", () => {
+    const result = parseOpenAIAssistantMessage({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        {
+          type: "function",
+          id: "call-1",
+          function: { name: "read_file", arguments: '{"path":"a.ts"}' },
+        },
+      ],
+    } as never);
+
+    expect(result.content).toEqual([
+      { type: "tool_use", id: "call-1", name: "read_file", input: { path: "a.ts" } },
+    ]);
   });
 
   test("reports malformed final tool arguments with the call id", () => {

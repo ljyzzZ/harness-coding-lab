@@ -1,15 +1,26 @@
 import OpenAI from "openai";
 
-import type { AssistantMessage, AssistantMessageContent, Message, TokenUsage } from "@/foundation/messages";
+import { assertNever, type AssistantMessage, type AssistantMessageContent, type Message, type TokenUsage } from "@/foundation/messages";
 import type { Tool } from "@/foundation/tools";
-import { text } from "node:stream/consumers";
 import type { ChatCompletionContentPartText, ChatCompletionMessageToolCall } from "openai/resources";
-import { url } from "node:inspector";
+
+interface OpenAIReasoningFields {
+  reasoning_content?: string | null;
+}
+
+export type OpenAIAssistantMessageParam =
+  OpenAI.ChatCompletionAssistantMessageParam & OpenAIReasoningFields;
+
+export type OpenAIChatCompletionMessageParam =
+  OpenAI.ChatCompletionMessageParam | OpenAIAssistantMessageParam;
+
+export type OpenAIChatCompletionMessage =
+  OpenAI.ChatCompletionMessage & OpenAIReasoningFields;
 
 export function convertToOpenAIMessages(
   messages: Message[],
-): OpenAI.ChatCompletionMessageParam[] {
-  const result: OpenAI.ChatCompletionMessageParam[] = [];
+): OpenAIChatCompletionMessageParam[] {
+  const result: OpenAIChatCompletionMessageParam[] = [];
   for (const message of messages) {
     switch (message.role) {
       case "system":
@@ -44,12 +55,14 @@ export function convertToOpenAIMessages(
         // thinking 的回传规则由 endpoint 决定，不能冒充用户文本。
         const content: ChatCompletionContentPartText[] = [];
         const tool_calls: ChatCompletionMessageToolCall[] = [];
+        let reasoningContent: string | undefined;
         for (const assistantContent of message.content) {
           switch (assistantContent.type) {
             case "text":
               content.push({ type: "text", text: assistantContent.text });
               break;
             case "thinking":
+              reasoningContent = assistantContent.thinking;
               break;
             case "tool_use":
               tool_calls.push({
@@ -61,13 +74,17 @@ export function convertToOpenAIMessages(
                 },
               });
               break;
+            default:
+              assertNever(assistantContent);
           }
         }
-        result.push({
+        const converted: OpenAIAssistantMessageParam = {
           role: "assistant",
-          content: content,
-          tool_calls: tool_calls,
-        })
+          content,
+          tool_calls,
+          reasoning_content: reasoningContent,
+        };
+        result.push(converted);
         break;
       case "tool":
         // TODO 3：一条 canonical ToolMessage 可生成多条 wire tool message；
@@ -80,6 +97,8 @@ export function convertToOpenAIMessages(
           })
         }
         break;
+      default:
+        assertNever(message);
     }
   }
   return result;
@@ -100,7 +119,7 @@ export function convertToOpenAITools(
 }
 
 export function parseOpenAIAssistantMessage(
-  message: OpenAI.ChatCompletionMessage,
+  message: OpenAIChatCompletionMessage,
   usage?: TokenUsage,
 ): AssistantMessage {
   const assistantMessageContent: AssistantMessageContent = [];
@@ -117,7 +136,12 @@ export function parseOpenAIAssistantMessage(
       thinking: reasoning,
     });
   }
-  assistantMessageContent.push({ type: "text", text: message.content ?? "" });
+  if (typeof message.content === "string") {
+    assistantMessageContent.push({
+      type: "text",
+      text: message.content,
+    });
+  }
   for (const tool_call of message.tool_calls ?? []) {
     let input: Record<string, unknown>;
 
