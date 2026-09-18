@@ -73,13 +73,16 @@ async function main(): Promise<void> {
     };
     const startedAt = performance.now();
     let finalMessage: AssistantMessage | undefined;
+    let printedText = "";
 
     console.log(`provider=${selected.providerName} model=${selected.modelName}`);
     for await (const snapshot of model.stream({
         prompt: "Answer concisely. Do not expose hidden reasoning.",
         messages: [userMessage],
     })) {
-        process.stdout.write(`\r${visibleText(snapshot)}`);
+        const text = visibleText(snapshot);
+        process.stdout.write(text.slice(printedText.length));
+        printedText = text;
         finalMessage = snapshot;
     }
     process.stdout.write("\n");
