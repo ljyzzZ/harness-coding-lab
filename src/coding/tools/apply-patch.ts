@@ -110,13 +110,13 @@ function parsePatch(patch: string): PatchFile[] {
 }
 
 function applyHunks(original: string, hunks: PatchHunk[]): string {
-    // TODO 1：将原文按行拆分，记录原文是否以换行结尾；末尾空项不作为正文行。
+    // 将原文按行拆分，记录原文是否以换行结尾；末尾空项不作为正文行。
     const hasTrailingNewline = original.endsWith("\n");
     const newline = original.includes("\r\n") ? "\r\n" : "\n";
     const source = original === "" ? [] : original.split(/\r?\n/);
     if (hasTrailingNewline) source.pop();
 
-    // TODO 2：保持 sourceIndex 和 output；先拷贝 hunk 前未改动的原文行。
+    // 保持 sourceIndex 和 output；先拷贝 hunk 前未改动的原文行。
     // oldStart 是 1-based；空文件插入 hunk 的 oldStart=0。当前位置已越过 hunk 时拒绝。
     let sourceIndex = 0;
     const output: string[] = [];
@@ -140,7 +140,7 @@ function applyHunks(original: string, hunks: PatchHunk[]): string {
         // 未改动的前文复制完后，输出长度应与 header 声明的新文件位置一致。
         if (output.length !== newIndex) throw new Error("Hunk newStart does not match output position");
 
-        // TODO 3：context/delete 行必须与 source[sourceIndex] 相等，否则 throw。
+        // context/delete 行必须与 source[sourceIndex] 相等，否则 throw。
         // context 拷贝并前移，delete 只前移，add 只追加；后续 hunk 的坐标仍以原文为基准。
         for (const line of hunk.lines) {
             if (line.kind === "add") {
@@ -155,7 +155,7 @@ function applyHunks(original: string, hunks: PatchHunk[]): string {
         }
     }
 
-    // TODO 4：拷贝原文剩余行，join("\n") 并保留原文末尾换行。
+    // 拷贝原文剩余行，join("\n") 并保留原文末尾换行。
     while (sourceIndex < source.length) output.push(source[sourceIndex++]!);
     // 沿用原文的 LF/CRLF 和末尾换行约定；删光正文时返回空字符串。
     const content = output.join(newline);
@@ -173,7 +173,7 @@ export function defineApplyPatchTool(options: { cwd: string }) {
                 const files = parsePatch(input.patch);
                 const changes: { path: string; content: string }[] = [];
                 const targets = new Set<string>();
-                // TODO 1：逐个文件验证 oldPath/newPath 的 workspace 边界（跳过 /dev/null），失败时保留原 code 返回。
+                // 逐个文件验证 oldPath/newPath 的 workspace 边界（跳过 /dev/null），失败时保留原 code 返回。
                 // 用 resolveWorkspacePath({ cwd: options.cwd, inputPath: file.newPath })，不要直接信任 patch 路径。
                 for (const file of files) {
                     signal?.throwIfAborted();
@@ -186,7 +186,7 @@ export function defineApplyPatchTool(options: { cwd: string }) {
                     });
                     if (target && !target.ok) return errorToolResult(target.error, target.error, target.code);
 
-                    // TODO 2：普通更新读取旧文件；--- /dev/null 表示新增，原文取 ""；不支持删除文件。
+                    // 普通更新读取旧文件；--- /dev/null 表示新增，原文取 ""；不支持删除文件。
                     // 用 applyHunks(original, file.hunks) 得到新文本；先完成内容校验，再写入对应文件。
                     if (!target) throw new Error("Deleting files is not supported");
                     if (targets.has(target.path)) throw new Error(`Duplicate patch target: ${file.newPath}`);
@@ -199,7 +199,7 @@ export function defineApplyPatchTool(options: { cwd: string }) {
                     targets.add(target.path);
                 }
 
-                // TODO 3：准备目标父目录，检查 signal，用 Bun.write 写入；记录 changedPaths。
+                // 准备目标父目录，检查 signal，用 Bun.write 写入；记录 changedPaths。
                 // 所有文件校验通过后才开始写入；写入阶段的 I/O 失败不具备跨文件回滚能力。
                 const changedPaths: string[] = [];
                 for (const change of changes) {
@@ -210,7 +210,7 @@ export function defineApplyPatchTool(options: { cwd: string }) {
                     changedPaths.push(change.path);
                 }
 
-                // TODO 4：返回 okToolResult(summary, { paths: changedPaths })。
+                // 返回 okToolResult(summary, { paths: changedPaths })。
                 return okToolResult(`Applied patch to ${changedPaths.length} files`, { paths: changedPaths });
             } catch (error) {
                 return errorFromException(error, "PATCH_APPLY_FAILED");
