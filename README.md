@@ -1,9 +1,20 @@
 # harness-coding-lab
 
-To install dependencies:
+To install the locked dependencies:
 
 ```bash
-bun install
+bun install --frozen-lockfile
+```
+
+Commit `bun.lock` together with `package.json` when adding or updating dependencies.
+The project-level `bunfig.toml` uses the public npm registry so user-level registry
+settings do not rewrite the lockfile's download URLs. Keep personal registry
+credentials in your user-level configuration.
+
+To add a dependency and update the lockfile:
+
+```bash
+bun add <package>
 ```
 
 To run:
