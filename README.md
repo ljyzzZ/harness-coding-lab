@@ -281,3 +281,9 @@ bun run check       # 类型检查、ESLint、测试，遇到失败就停止
 使用 `bun add <package>` 更新依赖，并把 `package.json` 与 `bun.lock` 一起提交。仓库的 [bunfig.toml](bunfig.toml) 固定使用公共 npm registry；个人 registry 凭据留在用户级配置中。
 
 新增功能时，应优先用 `ScriptedModelProvider` 或可注入的 SDK client 验证协议转换、事件顺序、取消和错误路径，再按需进行真实 API 验证。代码中的部分 `TODO` 保留了学习说明，是否完成应以实际实现与测试为准。
+
+## License
+
+本项目采用 [MIT License](LICENSE)。Copyright (c) 2026 ljyzzZ。
+
+第三方依赖及其版权声明遵循各自的许可证。
