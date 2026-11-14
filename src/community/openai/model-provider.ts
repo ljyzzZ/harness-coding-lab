@@ -104,7 +104,6 @@ export class OpenAIModelProvider implements ModelProvider {
             model,
             messages: convertToOpenAIMessages(messages),
             tools: tools ? convertToOpenAITools(tools) : undefined,
-            temperature: 0,
             ...options,
         };
     }

@@ -13,9 +13,7 @@ function visibleText(message: AssistantMessage): string {
 function redactThinking(message: AssistantMessage): AssistantMessage {
     return {
         ...message,
-        content: message.content.map((item) =>
-            item.type === "thinking" ? { ...item, thinking: "[hidden]" } : item,
-        ),
+        content: message.content.map((item) => (item.type === "thinking" ? { ...item, thinking: "[hidden]" } : item)),
     };
 }
 
@@ -38,7 +36,7 @@ async function main(): Promise<void> {
         openai: {
             apiKey: Bun.env.OPENAI_API_KEY?.trim(),
             baseURL: Bun.env.OPENAI_BASE_URL?.trim() || undefined,
-            modelName: Bun.env.OPENAI_MODEL?.trim() || "gpt-4.1-mini",
+            modelName: Bun.env.OPENAI_MODEL?.trim() || "gpt-6-sol",
             providerName: "OpenAI",
         },
         anthropic: {
@@ -66,7 +64,13 @@ async function main(): Promise<void> {
                   apiKey: selected.apiKey,
                   baseURL: selected.baseURL,
               });
-    const model = new Model({ name: selected.modelName, provider });
+    const model = new Model({
+        name: selected.modelName,
+        provider,
+        // GPT-6 Sol 的 Chat Completions 工具调用要求关闭推理。
+        modelOptions:
+            vendor === "openai" && selected.modelName === "gpt-6-sol" ? { reasoning_effort: "none" } : undefined,
+    });
     const userMessage: UserMessage = {
         role: "user",
         content: [{ type: "text", text: "用一句话解释 ReAct agent loop。" }],

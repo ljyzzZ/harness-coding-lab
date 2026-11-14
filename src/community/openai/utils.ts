@@ -80,8 +80,8 @@ export function convertToOpenAIMessages(
         }
         const converted: OpenAIAssistantMessageParam = {
           role: "assistant",
-          content,
-          tool_calls,
+          content: content.length > 0 ? content : null,
+          ...(tool_calls.length > 0 ? { tool_calls } : {}),
           reasoning_content: reasoningContent,
         };
         result.push(converted);
