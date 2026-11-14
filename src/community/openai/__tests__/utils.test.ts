@@ -44,6 +44,27 @@ describe("OpenAI protocol conversion", () => {
     expect(messages).toEqual(originalMessages);
   });
 
+  test.each(["你好", "hello world"])("omits tool_calls when replaying a text reply before input %s", (text) => {
+    const messages: Message[] = [
+      { role: "system", content: [{ type: "text", text: "Be concise" }] },
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      { role: "assistant", content: [{ type: "text", text: "Hi" }] },
+      { role: "user", content: [{ type: "text", text }] },
+    ];
+
+    const result = convertToOpenAIMessages(messages);
+
+    expect(result[2]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Hi" }],
+    });
+    expect(result[2]).not.toHaveProperty("tool_calls");
+    expect(result[3]).toEqual({
+      role: "user",
+      content: [{ type: "text", text }],
+    });
+  });
+
   test("does not turn assistant thinking into visible text and preserves tool calls", () => {
     const messages: Message[] = [
       {
@@ -126,6 +147,30 @@ describe("OpenAI protocol conversion", () => {
         { id: "call-2", function: { name: "read_file", arguments: '{"path":"b.ts"}' } },
       ],
     });
+  });
+
+  test("uses null content when replaying an assistant message with only a tool call", () => {
+    const result = convertToOpenAIMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "call-1", name: "read_file", input: { path: "a.ts" } },
+        ],
+      },
+      {
+        role: "tool",
+        content: [{ type: "tool_result", tool_use_id: "call-1", content: "A" }],
+      },
+    ]);
+
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        { id: "call-1", function: { name: "read_file", arguments: '{"path":"a.ts"}' } },
+      ],
+    });
+    expect(result[1]).toEqual({ role: "tool", tool_call_id: "call-1", content: "A" });
   });
 
   test("expands tool results and preserves their call ids", () => {

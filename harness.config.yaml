@@ -1,0 +1,9 @@
+defaultModel: openai
+models:
+  openai:
+    provider: openai
+    model: gpt-6-sol
+    baseURL: https://api.openai.com/v1
+    apiKeyEnv: OPENAI_API_KEY
+    options:
+      reasoning_effort: none

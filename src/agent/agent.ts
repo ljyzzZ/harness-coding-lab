@@ -15,9 +15,7 @@ import { serializeToolResult } from "./serialize-tool-result";
 import type { AgentMiddleware } from "./agent-middleware";
 import type { ModelContext } from "@/foundation/models";
 
-type BeforeToolUseDecision =
-    | { skip: false }
-    | { skip: true; result: unknown };
+type BeforeToolUseDecision = { skip: false } | { skip: true; result: unknown };
 
 export class Agent {
     private readonly _context: AgentContext;
@@ -129,14 +127,14 @@ export class Agent {
                 yield {
                     type: "progress",
                     subtype: "thinking",
-                }
+                };
             } else {
                 yield {
                     type: "progress",
                     subtype: "tool",
                     name: latestToolUse.name,
-                    input: latestToolUse.input
-                }
+                    input: latestToolUse.input,
+                };
             }
             signal?.throwIfAborted();
         }
@@ -144,7 +142,7 @@ export class Agent {
         return latest;
     }
 
-    private async* _act(toolUses: ToolUseContent[], signal?: AbortSignal): AsyncGenerator<AgentEvent> {
+    private async *_act(toolUses: ToolUseContent[], signal?: AbortSignal): AsyncGenerator<AgentEvent> {
         const pending = toolUses.map(async (toolUse, index) => {
             const message = await this._invokeTool(toolUse, signal);
             return { index, message };
@@ -162,28 +160,30 @@ export class Agent {
             this._context.messages.push(resolved.message);
             yield {
                 type: "message",
-                message: resolved.message
-            }
+                message: resolved.message,
+            };
         }
     }
 
     private _extractToolUses(message: AssistantMessage): ToolUseContent[] {
         // TODO 9：使用 filter + type predicate；禁止 `as ToolUseContent[]`。
-        return message.content.filter(
-            (content): content is ToolUseContent => content.type === "tool_use",
-        );
+        return message.content.filter((content): content is ToolUseContent => content.type === "tool_use");
     }
 
     private async _invokeTool(toolUse: ToolUseContent, signal?: AbortSignal): Promise<ToolMessage> {
         signal?.throwIfAborted();
-        const decision = await this._beforeToolUse(toolUse);
+        const decision = await this._beforeToolUse(toolUse, signal);
         signal?.throwIfAborted();
 
         let toolResult: unknown;
         if (decision.skip) {
             toolResult = decision.result;
         } else {
-            const execution = await this._toolRegistry.invoke({ name: toolUse.name, input: toolUse.input, signal: signal });
+            const execution = await this._toolRegistry.invoke({
+                name: toolUse.name,
+                input: toolUse.input,
+                signal: signal,
+            });
 
             if (!execution.ok && execution.code === "ABORTED") {
                 signal?.throwIfAborted();
@@ -196,12 +196,14 @@ export class Agent {
 
         return {
             role: "tool",
-            content: [{
-                type: "tool_result",
-                tool_use_id: toolUse.id,
-                content: serializeToolResult(toolResult),
-            }]
-        }
+            content: [
+                {
+                    type: "tool_result",
+                    tool_use_id: toolUse.id,
+                    content: serializeToolResult(toolResult),
+                },
+            ],
+        };
     }
 
     private async _beforeAgentRun(): Promise<void> {
@@ -269,11 +271,12 @@ export class Agent {
         }
     }
 
-    private async _beforeToolUse(toolUse: ToolUseContent): Promise<BeforeToolUseDecision> {
+    private async _beforeToolUse(toolUse: ToolUseContent, signal?: AbortSignal): Promise<BeforeToolUseDecision> {
         for (const middleware of this._middlewares) {
             const result = await middleware.beforeToolUse?.({
                 agentContext: this._context,
                 toolUse: toolUse,
+                signal: signal,
             });
             if (!result) continue;
 
@@ -297,9 +300,14 @@ export class Agent {
                 agentContext: this._context,
                 toolUse: toolUse,
                 toolResult: toolResult,
-            })
+            });
             if (result) Object.assign(this._context, result);
         }
     }
 
+    /** Clear the conversation only while the Agent is idle. */
+    clearMessages(): void {
+        if (this.streaming) throw new Error("Cannot clear messages while the Agent is running");
+        this._context.messages = [];
+    }
 }
